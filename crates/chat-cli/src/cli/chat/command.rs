@@ -50,6 +50,9 @@ pub enum Command {
     Prompts {
         subcommand: Option<PromptsSubcommand>,
     },
+    Settings {
+        subcommand: Option<SettingsSubcommand>,
+    },
     Usage,
     Load {
         path: String,
@@ -400,6 +403,62 @@ pub struct PromptsGetParam {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsSubcommand {
+    View { 
+        path: Option<String> 
+    },
+    Set { 
+        path: String, 
+        value: String 
+    },
+    Help,
+}
+
+impl SettingsSubcommand {
+    const AVAILABLE_COMMANDS: &str = color_print::cstr! {"<cyan!>Available subcommands</cyan!>
+  <em>help</em>                           <black!>Show an explanation for the settings command</black!>
+  <em>view [path]</em>                    <black!>View settings at the specified path or all settings</black!>
+  <em>set <<path>> <<value>></em>           <black!>Set a setting value</black!>"};
+    const BASE_COMMAND: &str = color_print::cstr! {"<cyan!>Usage: /settings [SUBCOMMAND]</cyan!>
+
+<cyan!>Description</cyan!>
+  Show and modify Amazon Q CLI settings.
+  Settings are organized in a hierarchical structure."};
+
+    fn usage_msg(header: impl AsRef<str>) -> String {
+        format!(
+            "{}\n\n{}\n\n{}",
+            header.as_ref(),
+            Self::BASE_COMMAND,
+            Self::AVAILABLE_COMMANDS
+        )
+    }
+
+    pub fn help_text() -> String {
+        color_print::cformat!(
+            r#"
+<magenta,em>Settings Management</magenta,em>
+
+The settings command allows you to view and modify Amazon Q CLI settings.
+Settings are organized in a hierarchical structure using dot notation.
+
+{}
+
+{}
+
+<cyan!>Examples</cyan!>
+• <em>/settings view</em>                  <black!>Show all available settings</black!>
+• <em>/settings view chat</em>             <black!>Show all settings under the chat category</black!>
+• <em>/settings set chat.editMode vi</em>  <black!>Set the chat edit mode to vi</black!>
+• <em>/settings set chat.enableNotifications true</em>  <black!>Enable notifications</black!>
+"#,
+            Self::BASE_COMMAND,
+            Self::AVAILABLE_COMMANDS
+        )
+    }
 }
 
 impl Command {
