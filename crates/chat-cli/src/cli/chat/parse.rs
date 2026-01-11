@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::sync::LazyLock;
 
 use crossterm::style::{
     Attribute,
@@ -8,6 +9,13 @@ use crossterm::style::{
 use crossterm::{
     Command,
     style,
+};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use syntect::util::{
+    LinesWithEndings,
+    as_24_bit_terminal_escaped,
 };
 use unicode_width::{
     UnicodeWidthChar,
@@ -44,6 +52,10 @@ use winnow::token::{
     take_until,
     take_while,
 };
+
+// Load syntax highlighting resources
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 const CODE_COLOR: Color = Color::Green;
 const HEADING_COLOR: Color = Color::Magenta;
@@ -168,14 +180,10 @@ pub fn interpret_markdown<'a, 'b>(
             );
         },
         true => {
+            // Since we're now handling the entire code block content in codeblock_begin,
+            // we only need to handle the end marker here
             stateful_alt!(
-                codeblock_less_than,
-                codeblock_greater_than,
-                codeblock_ampersand,
-                codeblock_quot,
-                codeblock_end,
-                codeblock_line_ending,
-                codeblock_fallback
+                codeblock_end
             );
         },
     }
@@ -549,18 +557,70 @@ fn codeblock_begin<'a, 'b>(
             return Err(ErrMode::from_error_kind(i, ErrorKind::Fail));
         }
 
-        // We don't want to do anything special to text inside codeblocks so we wait for all of it
-        // The alternative is to switch between parse rules at the top level but that's slightly involved
+        // Extract the language identifier and the code content
         let language = preceded("```", till_line_ending).parse_next(i)?;
         ascii::line_ending.parse_next(i)?;
 
+        // Collect all content until the closing code block marker
+        let mut code_content = String::new();
+        let start = i.checkpoint();
+        
+        // Find the end of the code block
+        while let Ok(line) = till_line_ending.parse_next(i) {
+            if line.trim() == "```" {
+                // We found the end marker, don't include it in the content
+                i.reset(&start);
+                break;
+            }
+            
+            code_content.push_str(line);
+            code_content.push('\n');
+            
+            // Consume the newline
+            if ascii::line_ending.parse_next(i).is_err() {
+                // If there's no newline, we've reached the end of input
+                break;
+            }
+        }
+
         state.in_codeblock = true;
 
+        // Print the language identifier if present
         if !language.is_empty() {
             queue(&mut o, style::Print(format!("{}\n", language).bold()))?;
         }
 
-        queue(&mut o, style::SetForegroundColor(CODE_COLOR))?;
+        // Apply syntax highlighting if we have a recognized language
+        if !language.is_empty() && !code_content.is_empty() {
+            // Try to find a syntax definition for the language
+            if let Some(syntax) = SYNTAX_SET.find_syntax_by_token(&language) {
+                let theme = &THEME_SET.themes["base16-ocean.dark"];
+                let mut highlighter = HighlightLines::new(syntax, theme);
+                
+                // Process each line with syntax highlighting
+                for line in LinesWithEndings::from(&code_content) {
+                    match highlighter.highlight_line(line, &SYNTAX_SET) {
+                        Ok(ranges) => {
+                            let highlighted = as_24_bit_terminal_escaped(&ranges[..], false);
+                            queue(&mut o, style::Print(highlighted))?;
+                        },
+                        Err(_) => {
+                            // Fall back to plain text if highlighting fails
+                            queue(&mut o, style::SetForegroundColor(CODE_COLOR))?;
+                            queue(&mut o, style::Print(line))?;
+                        }
+                    }
+                }
+            } else {
+                // Language not recognized, use default color
+                queue(&mut o, style::SetForegroundColor(CODE_COLOR))?;
+                queue(&mut o, style::Print(code_content))?;
+            }
+        } else {
+            // No language specified, use default color
+            queue(&mut o, style::SetForegroundColor(CODE_COLOR))?;
+            queue(&mut o, style::Print(code_content))?;
+        }
 
         Ok(())
     }
